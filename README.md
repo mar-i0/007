@@ -118,6 +118,21 @@ Examples:
 
 The conversation has memory within a session, so follow-ups work.
 
+### In-session commands
+
+While chatting you can type:
+
+- **`/models`** — show the models that worked in the last benchmark and switch to one
+  live (reuses the last results, no extra API calls). Add **`/models retest`** to re-probe.
+  Switching starts a fresh conversation. It also offers to save the choice as default.
+- **`/help`** — list commands.
+- **`/quit`** — exit.
+
+This is handy when a model hits a limit. Free tiers often have a low **tokens-per-minute**
+cap (e.g. Groq free ≈ 6000 TPM): reading a big file or web page can exceed it and you'll
+see a `413 / rate_limit_exceeded` error. The REPL doesn't crash — just `/models` to a model
+with more headroom (e.g. `gpt-oss:120b` on ollama-cloud, `gemini-2.5-flash`, or a paid one).
+
 ## PowerShell specifics
 
 - **UTF-8 is forced** on input/output so accented text (e.g. Spanish) doesn't crash the
@@ -160,6 +175,9 @@ run without prompting.
   instruction-tuned models (Llama 3.3 70B, GPT-4o, Claude, Gemini, DeepSeek) handle it
   well, smaller/local models less so. If a model ignores tools or errors on them, pick a
   stronger one — the REPL won't crash, it prints `[error]` and waits for your next message.
+- **Tool output is capped** at `TOOL_OUTPUT_LIMIT` (8000 chars, near the top of `007.py`)
+  so reading a big file or page doesn't blow a small model's token limit. The model sees
+  the first chunk plus a `[truncated ...]` note; raise the cap for big-context models.
 - **Web search**: Anthropic has a native server-side `web_search` tool (fast lookups);
   other providers use the Playwright `browser_*` tools instead.
 - **OpenAI `max_tokens`** is omitted on purpose so the loop works across model families

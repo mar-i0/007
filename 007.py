@@ -18,7 +18,8 @@ Quick start (PowerShell):
 Tools: read_file, write_file, run_shell, browser_* (Playwright web browsing),
 and native web search on Anthropic. write_file, run_shell, browser_click and
 browser_type ask for [y/N] confirmation first.
-Quit with Ctrl-Z then Enter (Windows) or Ctrl-D (macOS/Linux).
+In the prompt: /models switches model live, /help lists commands, /quit exits
+(or Ctrl-Z then Enter on Windows, Ctrl-D on macOS/Linux).
 """
 
 import argparse
@@ -46,6 +47,8 @@ CONFIG_PATH = os.path.join(os.path.expanduser("~"), ".007.json")
 
 BROWSER_HEADLESS = True    # set False to watch the Playwright browser window
 PAGE_TEXT_LIMIT = 6000     # max chars of page text returned to the model
+TOOL_OUTPUT_LIMIT = 8000   # max chars of any tool result sent back to the model
+                           # (keeps big files/pages from blowing small models' token limits)
 
 SYSTEM = (
     "You are a helpful work assistant running on the user's laptop. "
@@ -307,8 +310,19 @@ def _close_browser():
 atexit.register(_close_browser)
 
 
+def _truncate(result):
+    if isinstance(result, str) and len(result) > TOOL_OUTPUT_LIMIT:
+        return result[:TOOL_OUTPUT_LIMIT] + "\n... [truncated {} chars to fit the model's limits]".format(
+            len(result) - TOOL_OUTPUT_LIMIT)
+    return result
+
+
 def execute_tool(name, tool_input):
-    """Run a client-side tool and return a string result (never raises)."""
+    """Run a tool and return a length-capped string result; never raises."""
+    return _truncate(_run_tool(name, tool_input))
+
+
+def _run_tool(name, tool_input):
     try:
         if name == "read_file":
             with open(tool_input["path"], "r", encoding="utf-8") as f:
@@ -662,11 +676,15 @@ def list_providers():
     print("\nKeys file: keys.env (next to the script).  Config: {}".format(CONFIG_PATH))
 
 
+# Cache of the most recent benchmark so /models can reuse it without re-probing.
+_LAST = {"working": None, "suggestion": None}
+
+
 def run_benchmark():
     """Probe every model of every available provider (chat + tool-calling).
 
     Returns (working_rows, suggestion) where each row is
-    (name, model, ok, ms, note, free, tools_ok).
+    (name, model, ok, ms, note, free, tools_ok). Also caches the result in _LAST.
     """
     print("Checking available providers (chat + a tool-call test per model)...\n")
     rows = []
@@ -695,14 +713,25 @@ def run_benchmark():
               or by_speed([r for r in working if r[5]])            # free, chat-only
               or by_speed(working))                                # anything reachable
     suggestion = ranked[0] if ranked else None
+    _LAST["working"], _LAST["suggestion"] = working, suggestion
     return working, suggestion
 
 
-def choose_via_benchmark():
-    working, suggestion = run_benchmark()
+def select_model(keep_on_empty=False, retest=True):
+    """Show working models and let the user pick one. Returns (provider, model) or None.
+
+    retest=False reuses the last benchmark (fast, no extra API calls) when available.
+    keep_on_empty=True makes an empty answer mean 'keep current' (used by /models).
+    """
+    if retest or _LAST["working"] is None:
+        working, suggestion = run_benchmark()
+    else:
+        working, suggestion = _LAST["working"], _LAST["suggestion"]
+        print("Models that worked in the last check (type /models retest to re-check):")
+
     if not working:
-        print("\nNo provider is available. Set an API key (see --list) and retry.")
-        sys.exit(1)
+        print("\nNo models are working right now.")
+        return None
 
     print("\nWorking models:")
     for i, r in enumerate(working, 1):
@@ -711,20 +740,40 @@ def choose_via_benchmark():
         print("  [{}] {} / {}   {} ms   ({}, {}){}".format(
             i, r[0], r[1], r[3], "free" if r[5] else "paid", tools, star))
 
-    raw = input("\nChoose a number (Enter = suggested): ").strip()
-    choice = suggestion
-    if raw:
+    default_hint = "keep current" if keep_on_empty else "suggested"
+    raw = input("\nChoose a number (Enter = {}): ".format(default_hint)).strip()
+    if not raw:
+        if keep_on_empty:
+            return None
+        choice = suggestion
+    else:
         try:
             choice = working[int(raw) - 1]
         except Exception:
-            print("Invalid choice; using the suggestion.")
+            print("Invalid choice.")
+            return None if keep_on_empty else suggestion
     provider, model = choice[0], choice[1]
 
     ans = input("\n¿Usarlo como predeterminado? [y/N] ").strip().lower()
-    if ans == "y":
-        if save_config(provider, model):
-            print("Saved as default in {}".format(CONFIG_PATH))
+    if ans == "y" and save_config(provider, model):
+        print("Saved as default in {}".format(CONFIG_PATH))
     return provider, model
+
+
+def choose_via_benchmark():
+    sel = select_model(keep_on_empty=False, retest=True)
+    if sel is None:
+        print("\nNo provider is available. Set an API key (see --list) and retry.")
+        sys.exit(1)
+    return sel
+
+
+def build_session(provider, model):
+    """Create (client, runner, messages) for a provider/model. May raise ImportError."""
+    client = make_client(provider)
+    if PROVIDERS[provider]["kind"] == "anthropic":
+        return client, run_anthropic, []
+    return client, run_openai, [{"role": "system", "content": SYSTEM}]
 
 
 # --------------------------------------------------------------------------- #
@@ -774,20 +823,15 @@ def main():
     provider, model = resolve(args)
 
     try:
-        client = make_client(provider)
+        client, runner, messages = build_session(provider, model)
     except ImportError as e:
         sdk = "anthropic" if PROVIDERS[provider]["kind"] == "anthropic" else "openai"
         print("Missing SDK for '{}': {}. Run: pip install --user {}".format(provider, e, sdk))
         return
 
-    if PROVIDERS[provider]["kind"] == "anthropic":
-        runner, messages = run_anthropic, []
-    else:
-        runner, messages = run_openai, [{"role": "system", "content": SYSTEM}]
-
     quit_hint = "Ctrl-Z then Enter" if IS_WINDOWS else "Ctrl-D"
-    print("007 ready ({} / {}). Type a request; {} to quit.".format(
-        provider, model, quit_hint))
+    print("007 ready ({} / {}). Type a request, /models to switch model, "
+          "/help for commands, {} to quit.".format(provider, model, quit_hint))
     while True:
         try:
             user = input("\nYou: ").strip()
@@ -796,6 +840,34 @@ def main():
             break
         if not user:
             continue
+
+        if user.startswith("/"):
+            parts = user[1:].split()
+            cmd = parts[0].lower() if parts else ""
+            if cmd in ("quit", "exit", "q"):
+                break
+            if cmd in ("help", "h", "?"):
+                print("Commands:\n"
+                      "  /models [retest]  pick a model (reuses last benchmark; "
+                      "'retest' re-checks)\n"
+                      "  /help             show this help\n"
+                      "  /quit             exit")
+                continue
+            if cmd in ("models", "model", "m"):
+                retest = ("retest" in parts[1:]) or (_LAST["working"] is None)
+                sel = select_model(keep_on_empty=True, retest=retest)
+                if sel and (sel[0], sel[1]) != (provider, model):
+                    try:
+                        client, runner, messages = build_session(sel[0], sel[1])
+                        provider, model = sel
+                        print("\nSwitched to {} / {} (started a fresh conversation).".format(
+                            provider, model))
+                    except ImportError as e:
+                        print("[error] {}".format(e))
+                continue
+            print("Unknown command '{}'. Try /help.".format(user))
+            continue
+
         messages.append({"role": "user", "content": user})
         try:
             runner(client, messages, model)
