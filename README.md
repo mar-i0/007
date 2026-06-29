@@ -106,7 +106,12 @@ candidate list per provider lives in the `PROVIDERS` dict in `007.py`, easy to e
 python 007.py                          # saved default, else auto-detect (free first)
 python 007.py --provider groq          # force a provider (uses its default model)
 python 007.py --provider openrouter --model "qwen/qwen-2.5-72b-instruct:free"
+python 007.py --skip-permissions       # auto-confirm tools (no [y/N]) - use with care
 ```
+
+**`--skip-permissions`** (alias `-y`) runs every tool — including `run_shell`, `write_file`
+and browser clicks — **without asking**. Convenient, but the model can then run/modify
+anything; only use it when you trust the task. Each action is still printed (`[auto-yes] ...`).
 
 Type a request; quit with **Ctrl-Z then Enter** (Windows) or **Ctrl-D** (macOS/Linux).
 Examples:
@@ -153,6 +158,16 @@ Four tools drive a real Chromium browser, with one persistent browser per sessio
 Runs headless by default; set `BROWSER_HEADLESS = False` near the top of `007.py` to watch
 the window. The browser starts lazily, so you only need Playwright installed if you browse.
 This gives **every** provider real web access, not just Anthropic.
+
+**If browsing "doesn't work":** it's usually one of these, not a bug —
+1. **The model isn't choosing the browser tools** (it tries `curl`/`w3m` in `run_shell`, or
+   passes a URL to `read_file`). Small models do this; the system prompt now steers against
+   it, but if it persists, `/models` to a stronger one (e.g. `gpt-oss:120b`, `gemini-2.5-flash`).
+   Or just ask explicitly: *"Usa browser_navigate para abrir <url>…"*.
+2. **Playwright/Chromium not installed** — run `pip install --user playwright` and
+   `python -m playwright install chromium`. A missing install returns a clear error.
+3. **The site blocks bots / shows a cookie wall** (investing.com and similar). Try a more
+   scraping-friendly source, or have the model click the consent button with `browser_click`.
 
 ## Safety gate
 

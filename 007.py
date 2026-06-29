@@ -51,10 +51,15 @@ TOOL_OUTPUT_LIMIT = 8000   # max chars of any tool result sent back to the model
                            # (keeps big files/pages from blowing small models' token limits)
 
 SYSTEM = (
-    "You are a helpful work assistant running on the user's laptop. "
-    "Use the tools to read/write files, run {} commands, and browse the web with "
-    "a real browser (browser_navigate / browser_read / browser_click / browser_type). "
-    "Be concise. Prefer doing the work over describing it."
+    "You are a helpful work assistant running on the user's laptop.\n"
+    "Tools and when to use them:\n"
+    "- read_file / write_file: LOCAL files only - a filesystem path, never a URL.\n"
+    "- run_shell: run {} commands for LOCAL tasks. Do NOT use it to download web pages "
+    "(no curl / wget / w3m / Invoke-WebRequest for scraping).\n"
+    "- browser_navigate / browser_read / browser_click / browser_type: open and read web "
+    "pages, click links, fill forms. ALWAYS use these to get information from a website, "
+    "then write_file to save results locally.\n"
+    "Be concise and prefer doing the work over describing it."
 ).format(SHELL_NAME)
 
 
@@ -172,7 +177,7 @@ PROVIDERS = {
 TOOL_SPECS = [
     {
         "name": "read_file",
-        "description": "Read a UTF-8 text file and return its contents.",
+        "description": "Read a LOCAL UTF-8 text file (a filesystem path, NOT a URL) and return its contents.",
         "parameters": {
             "type": "object",
             "properties": {"path": {"type": "string", "description": "File path"}},
@@ -193,7 +198,8 @@ TOOL_SPECS = [
     },
     {
         "name": "run_shell",
-        "description": "Run a {} command in the working directory; returns stdout+stderr.".format(SHELL_NAME),
+        "description": ("Run a {} command for LOCAL tasks; returns stdout+stderr. "
+                        "Do NOT use it to fetch web pages - use browser_navigate.").format(SHELL_NAME),
         "parameters": {
             "type": "object",
             "properties": {"command": {"type": "string"}},
@@ -239,7 +245,13 @@ TOOL_SPECS = [
 ]
 
 
+_FLAGS = {"auto_yes": False}    # set by --skip-permissions
+
+
 def confirm(action):
+    if _FLAGS["auto_yes"]:
+        print("[auto-yes] {}".format(action))
+        return True
     return input("\n[confirm] {} ? [y/N] ".format(action)).strip().lower() == "y"
 
 
@@ -810,7 +822,13 @@ def main():
                         help="test available providers, suggest one, and offer to save it")
     parser.add_argument("--list", action="store_true",
                         help="list providers and which are available, then exit")
+    parser.add_argument("--skip-permissions", "-y", action="store_true",
+                        help="auto-confirm every tool action (no [y/N] prompts) - use with care")
     args = parser.parse_args()
+
+    _FLAGS["auto_yes"] = args.skip_permissions
+    if _FLAGS["auto_yes"]:
+        print("[!] --skip-permissions: tools (write_file, run_shell, browser) run WITHOUT asking.")
 
     loaded = load_keys_file()                  # fill env from keys.env if present
     if loaded:
