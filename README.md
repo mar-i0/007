@@ -80,10 +80,14 @@ $env:GROQ_API_KEY = "gsk_..."        # example: a free provider
 python 007.py --benchmark
 ```
 
-It pings every available provider's default model once, prints a ranked table (latency,
-free/paid, or why it was skipped), and **suggests one** (fastest free that works). You pick
-a number; it then asks **¿Usarlo como predeterminado?** and, if yes, saves your choice to
-`~/.007.json` so future runs start there automatically.
+It pings **every model of every available provider** (~40 models across the 9 providers),
+prints a ranked table (latency, free/paid, or why it was skipped), and **suggests one**
+(fastest free that works). You pick a number; it then asks **¿Usarlo como predeterminado?**
+and, if yes, saves your choice to `~/.007.json` so future runs start there automatically.
+
+Model IDs drift over time, so some may show `FAIL` — that's harmless; just pick a working
+one. The full candidate list per provider lives in the `PROVIDERS` dict in `007.py`, easy
+to trim or extend.
 
 ## 4. Run
 

@@ -64,46 +64,87 @@ SYSTEM = (
 PROVIDERS = {
     "groq": {
         "kind": "openai", "key_env": "GROQ_API_KEY",
-        "base_url": "https://api.groq.com/openai/v1",
-        "default_model": "llama-3.3-70b-versatile", "free": True,
+        "base_url": "https://api.groq.com/openai/v1", "free": True,
+        "default_model": "llama-3.3-70b-versatile",
+        "models": [
+            "llama-3.3-70b-versatile",
+            "llama-3.1-8b-instant",
+            "meta-llama/llama-4-scout-17b-16e-instruct",
+            "meta-llama/llama-4-maverick-17b-128e-instruct",
+            "moonshotai/kimi-k2-instruct",
+            "qwen/qwen3-32b",
+            "deepseek-r1-distill-llama-70b",
+            "gemma2-9b-it",
+        ],
     },
     "cerebras": {
         "kind": "openai", "key_env": "CEREBRAS_API_KEY",
-        "base_url": "https://api.cerebras.ai/v1",
-        "default_model": "llama-3.3-70b", "free": True,
+        "base_url": "https://api.cerebras.ai/v1", "free": True,
+        "default_model": "llama-3.3-70b",
+        "models": [
+            "llama-3.3-70b",
+            "llama3.1-8b",
+            "llama-4-scout-17b-16e-instruct",
+            "qwen-3-32b",
+        ],
     },
     "gemini": {
         "kind": "openai", "key_env": "GEMINI_API_KEY",
-        "base_url": "https://generativelanguage.googleapis.com/v1beta/openai/",
-        "default_model": "gemini-2.0-flash", "free": True,
+        "base_url": "https://generativelanguage.googleapis.com/v1beta/openai/", "free": True,
+        "default_model": "gemini-2.0-flash",
+        "models": [
+            "gemini-2.0-flash",
+            "gemini-2.0-flash-lite",
+            "gemini-2.5-flash",
+            "gemini-2.5-pro",
+            "gemini-1.5-flash",
+        ],
     },
     "openrouter": {
         "kind": "openai", "key_env": "OPENROUTER_API_KEY",
-        "base_url": "https://openrouter.ai/api/v1",
-        "default_model": "meta-llama/llama-3.3-70b-instruct:free", "free": True,
+        "base_url": "https://openrouter.ai/api/v1", "free": True,
+        "default_model": "meta-llama/llama-3.3-70b-instruct:free",
+        "models": [
+            "meta-llama/llama-3.3-70b-instruct:free",
+            "qwen/qwen-2.5-72b-instruct:free",
+            "google/gemini-2.0-flash-exp:free",
+            "deepseek/deepseek-chat-v3-0324:free",
+            "mistralai/mistral-small-3.1-24b-instruct:free",
+            "meta-llama/llama-3.2-3b-instruct:free",
+        ],
     },
     "ollama": {
         "kind": "openai", "key_env": None, "local": True,
-        "base_url": "http://localhost:11434/v1",
-        "default_model": "llama3.2", "free": True,
+        "base_url": "http://localhost:11434/v1", "free": True,
+        "default_model": "llama3.2",
+        "models": ["llama3.2", "llama3.1", "qwen2.5", "mistral"],
     },
     "openai": {
-        "kind": "openai", "key_env": "OPENAI_API_KEY",
-        "base_url": None, "default_model": "gpt-4o", "free": False,
+        "kind": "openai", "key_env": "OPENAI_API_KEY", "base_url": None, "free": False,
+        "default_model": "gpt-4o",
+        "models": ["gpt-4o", "gpt-4o-mini", "gpt-4.1", "gpt-4.1-mini", "o4-mini"],
     },
     "anthropic": {
-        "kind": "anthropic", "key_env": "ANTHROPIC_API_KEY",
-        "default_model": "claude-opus-4-8", "free": False,
+        "kind": "anthropic", "key_env": "ANTHROPIC_API_KEY", "free": False,
+        "default_model": "claude-opus-4-8",
+        "models": ["claude-opus-4-8", "claude-sonnet-4-6", "claude-haiku-4-5"],
     },
     "mistral": {
         "kind": "openai", "key_env": "MISTRAL_API_KEY",
-        "base_url": "https://api.mistral.ai/v1",
-        "default_model": "mistral-large-latest", "free": False,
+        "base_url": "https://api.mistral.ai/v1", "free": False,
+        "default_model": "mistral-large-latest",
+        "models": [
+            "mistral-large-latest",
+            "mistral-small-latest",
+            "open-mistral-nemo",
+            "ministral-8b-latest",
+        ],
     },
     "deepseek": {
         "kind": "openai", "key_env": "DEEPSEEK_API_KEY",
-        "base_url": "https://api.deepseek.com",
-        "default_model": "deepseek-chat", "free": False,
+        "base_url": "https://api.deepseek.com", "free": False,
+        "default_model": "deepseek-chat",
+        "models": ["deepseek-chat", "deepseek-reasoner"],
     },
 }
 
@@ -550,38 +591,42 @@ def ping(name, model):
         return False, int((time.time() - t0) * 1000), str(e).splitlines()[0][:90]
 
 
+def _models_of(prov):
+    return prov.get("models") or [prov["default_model"]]
+
+
 def list_providers():
-    print("Providers (set the matching env var to enable one):\n")
+    print("Providers (set the matching env var, or use keys.env):\n")
     for name, prov in PROVIDERS.items():
         tag = "free " if prov.get("free") else "paid "
         key = prov.get("key_env") or "(local, no key)"
         mark = "available" if is_available(name) else "not set"
-        print("  {:<11} {} {:<22} -> {:<10} [{}]".format(
-            name, tag, key, prov["default_model"], mark))
-    print("\nConfig file: {}".format(CONFIG_PATH))
+        print("  {:<11} {} {:<22} {:>2} models  [{}]".format(
+            name, tag, key, len(_models_of(prov)), mark))
+    print("\nKeys file: keys.env (next to the script).  Config: {}".format(CONFIG_PATH))
 
 
 def run_benchmark():
-    """Ping every available provider's default model; print a ranked table.
+    """Ping every model of every available provider; print a ranked table.
 
     Returns (working_rows, suggestion) where each row is
     (name, model, ok, ms, note, free).
     """
-    print("Checking available providers (this calls each one once)...\n")
+    print("Checking available providers (one quick call per model)...\n")
     rows = []
     for name, prov in PROVIDERS.items():
-        model = prov["default_model"]
         free = bool(prov.get("free"))
         if not is_available(name):
             reason = "local server not reachable" if prov.get("local") \
                 else "no {}".format(prov.get("key_env"))
-            print("  {:<11} {:<34} -- skipped ({})".format(name, model, reason))
+            print("  {:<11} -- skipped ({})".format(name, reason))
             continue
-        ok, ms, note = ping(name, model)
-        status = "OK  {:>5} ms".format(ms) if ok else "FAIL ({})".format(note)
-        print("  {:<11} {:<34} {} {}".format(
-            name, model, status, "[free]" if free else "[paid]"))
-        rows.append((name, model, ok, ms, note, free))
+        for model in _models_of(prov):
+            ok, ms, note = ping(name, model)
+            status = "OK  {:>5} ms".format(ms) if ok else "FAIL ({})".format(note)
+            print("  {:<11} {:<46} {} {}".format(
+                name, model, status, "[free]" if free else "[paid]"))
+            rows.append((name, model, ok, ms, note, free))
 
     working = [r for r in rows if r[2]]
     free_working = sorted([r for r in working if r[5]], key=lambda r: r[3])
