@@ -139,6 +139,7 @@ PROVIDERS = {
     "ollama-cloud": {                          # hosted big models via an API key
         "kind": "openai", "key_env": "OLLAMA_API_KEY",
         "base_url": "https://ollama.com/v1", "free": True,
+        "dynamic": True,                       # benchmark fetches the live list via /v1/models
         "default_model": "gpt-oss:120b",       # known-good default; many below need a sub
         "models": [
             # flagships / newest (several may require an Ollama Cloud subscription -> FAIL)
@@ -833,14 +834,24 @@ def _models_of(prov):
     return prov.get("models") or [prov["default_model"]]
 
 
+def _fetch_models(name):
+    """Live model ids from a provider's /v1/models (OpenAI-compatible). [] on failure."""
+    try:
+        client = make_client(name, timeout=15)
+        return sorted(m.id for m in client.models.list().data)
+    except Exception:
+        return []
+
+
 def list_providers():
     print("Providers (set the matching env var, or use keys.env):\n")
     for name, prov in PROVIDERS.items():
         tag = "free " if prov.get("free") else "paid "
         key = prov.get("key_env") or "(local, no key)"
         mark = "available" if is_available(name) else "not set"
-        print("  {:<13} {} {:<22} {:>2} models  [{}]".format(
-            name, tag, key, len(_models_of(prov)), mark))
+        count = "live (/v1/models)" if prov.get("dynamic") \
+            else "{} models".format(len(_models_of(prov)))
+        print("  {:<13} {} {:<22} {:<17} [{}]".format(name, tag, key, count, mark))
     print("\nKeys file: keys.env (next to the script).  Config: {}".format(CONFIG_PATH))
 
 
@@ -863,7 +874,13 @@ def run_benchmark():
                 else "no {}".format(prov.get("key_env"))
             print("  {:<13} -- skipped ({})".format(name, reason))
             continue
-        for model in _models_of(prov):
+        models = _models_of(prov)
+        if prov.get("dynamic"):                    # ask the provider what it actually has
+            live = _fetch_models(name)
+            if live:
+                models = live
+                print("  {:<13} -> {} models from /v1/models".format(name, len(live)))
+        for model in models:
             ok, ms, tools_ok, note = probe(name, model)
             if ok:
                 status = "OK {:>5} ms  tools:{}".format(ms, "yes" if tools_ok else "NO ")

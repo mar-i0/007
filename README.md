@@ -101,12 +101,14 @@ Notes: the tool test is a heuristic (a capable model could still answer in text)
 IDs drift, so some rows may show `FAIL` — harmless, just pick a `tools:yes` one. The
 candidate list per provider lives in the `PROVIDERS` dict in `007.py`, easy to edit.
 
-`ollama-cloud` ships a large model list (GLM, MiniMax, Kimi, DeepSeek, Qwen, Nemotron,
-Gemma, gpt-oss, …). Many flagships need an Ollama Cloud subscription and will show
+`ollama-cloud` is **dynamic**: at benchmark time it asks the server for the live catalogue
+via `GET /v1/models`, so it always matches what your account exposes (no stale IDs). If that
+call fails it falls back to the built-in list (GLM, MiniMax, Kimi, DeepSeek, Qwen, Nemotron,
+Gemma, gpt-oss, …). Many flagships need an Ollama Cloud subscription and show
 `FAIL (403 … requires a subscription)`; the free-tier ones (e.g. `gpt-oss:120b/20b`,
-`qwen3-coder`) pass. With ~34 cloud models the benchmark takes longer — trim the list in
-`PROVIDERS["ollama-cloud"]["models"]` if you want it faster, and use plain `/models`
-(cached) instead of `/models retest` afterwards.
+`qwen3-coder`) pass. It's a lot of models, so the benchmark takes longer — afterwards use
+plain `/models` (cached) instead of `/models retest`. (Any provider can opt into this by
+setting `"dynamic": True` in `PROVIDERS`.)
 
 ## 4. Run
 
