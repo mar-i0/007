@@ -78,8 +78,11 @@ $env:GROQ_API_KEY = "gsk_..."        # example: a free provider
 ## 3. Pick a model with `--benchmark`
 
 ```powershell
-python 007.py --benchmark
+python 007.py --benchmark      # full: every model of every provider
+python 007.py --quick          # fast: just one model per provider (implies --benchmark)
 ```
+
+In a session you can also re-run it: `/models retest` (full) or `/models quick` (fast).
 
 It probes **every model of every available provider** (~75 models across the 10 providers,
 most of them on `ollama-cloud`). Each probe does two things in one call: confirms the model

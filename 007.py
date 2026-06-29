@@ -12,6 +12,7 @@ Quick start (PowerShell):
     pip install --user openai anthropic         # install what you need
     $env:GROQ_API_KEY = "..."                    # or any provider's key (see --list)
     python 007.py --benchmark                    # test available models, pick & save a default
+    python 007.py --quick                        # quick benchmark: 1 model per provider
     python 007.py                                # use the saved / auto-detected default
     python 007.py --provider groq --model llama-3.3-70b-versatile   # force one
 
@@ -859,13 +860,15 @@ def list_providers():
 _LAST = {"working": None, "suggestion": None}
 
 
-def run_benchmark():
-    """Probe every model of every available provider (chat + tool-calling).
+def run_benchmark(quick=False):
+    """Probe models of every available provider (chat + tool-calling).
 
+    quick=True probes only one model (the default) per provider - fast startup.
     Returns (working_rows, suggestion) where each row is
     (name, model, ok, ms, note, free, tools_ok). Also caches the result in _LAST.
     """
-    print("Checking available providers (chat + a tool-call test per model)...\n")
+    print("Checking available providers ({})...\n".format(
+        "1 model each, quick" if quick else "chat + a tool-call test per model"))
     rows = []
     for name, prov in PROVIDERS.items():
         free = bool(prov.get("free"))
@@ -874,12 +877,15 @@ def run_benchmark():
                 else "no {}".format(prov.get("key_env"))
             print("  {:<13} -- skipped ({})".format(name, reason))
             continue
-        models = _models_of(prov)
-        if prov.get("dynamic"):                    # ask the provider what it actually has
-            live = _fetch_models(name)
-            if live:
-                models = live
-                print("  {:<13} -> {} models from /v1/models".format(name, len(live)))
+        if quick:
+            models = [prov["default_model"]]
+        else:
+            models = _models_of(prov)
+            if prov.get("dynamic"):                # ask the provider what it actually has
+                live = _fetch_models(name)
+                if live:
+                    models = live
+                    print("  {:<13} -> {} models from /v1/models".format(name, len(live)))
         for model in models:
             ok, ms, tools_ok, note = probe(name, model)
             if ok:
@@ -902,14 +908,15 @@ def run_benchmark():
     return working, suggestion
 
 
-def select_model(keep_on_empty=False, retest=True):
+def select_model(keep_on_empty=False, retest=True, quick=False):
     """Show working models and let the user pick one. Returns (provider, model) or None.
 
     retest=False reuses the last benchmark (fast, no extra API calls) when available.
+    quick=True probes only one model per provider when (re)testing.
     keep_on_empty=True makes an empty answer mean 'keep current' (used by /models).
     """
     if retest or _LAST["working"] is None:
-        working, suggestion = run_benchmark()
+        working, suggestion = run_benchmark(quick=quick)
     else:
         working, suggestion = _LAST["working"], _LAST["suggestion"]
         print("Models that worked in the last check (type /models retest to re-check):")
@@ -945,8 +952,8 @@ def select_model(keep_on_empty=False, retest=True):
     return provider, model
 
 
-def choose_via_benchmark():
-    sel = select_model(keep_on_empty=False, retest=True)
+def choose_via_benchmark(quick=False):
+    sel = select_model(keep_on_empty=False, retest=True, quick=quick)
     if sel is None:
         print("\nNo provider is available. Set an API key (see --list) and retry.")
         sys.exit(1)
@@ -967,8 +974,8 @@ def build_session(provider, model):
 
 def resolve(args):
     """Decide (provider, model) from flags, then config, then auto-detect."""
-    if args.benchmark:
-        return choose_via_benchmark()
+    if args.benchmark or args.quick:
+        return choose_via_benchmark(quick=args.quick)
     if args.provider:
         return args.provider, (args.model or PROVIDERS[args.provider]["default_model"])
 
@@ -993,6 +1000,8 @@ def main():
     parser.add_argument("--model", default=None, help="override the model id")
     parser.add_argument("--benchmark", action="store_true",
                         help="test available providers, suggest one, and offer to save it")
+    parser.add_argument("--quick", action="store_true",
+                        help="quick benchmark: probe only one model per provider (implies --benchmark)")
     parser.add_argument("--list", action="store_true",
                         help="list providers and which are available, then exit")
     parser.add_argument("--skip-permissions", "-y", action="store_true",
@@ -1039,14 +1048,16 @@ def main():
                 break
             if cmd in ("help", "h", "?"):
                 print("Commands:\n"
-                      "  /models [retest]  pick a model (reuses last benchmark; "
-                      "'retest' re-checks)\n"
+                      "  /models           pick a model (reuses last benchmark)\n"
+                      "  /models retest    re-check all models\n"
+                      "  /models quick     re-check just one model per provider (fast)\n"
                       "  /help             show this help\n"
                       "  /quit             exit")
                 continue
             if cmd in ("models", "model", "m"):
-                retest = ("retest" in parts[1:]) or (_LAST["working"] is None)
-                sel = select_model(keep_on_empty=True, retest=retest)
+                quick = "quick" in parts[1:]
+                retest = quick or ("retest" in parts[1:]) or (_LAST["working"] is None)
+                sel = select_model(keep_on_empty=True, retest=retest, quick=quick)
                 if sel and (sel[0], sel[1]) != (provider, model):
                     try:
                         client, runner, messages = build_session(sel[0], sel[1])
