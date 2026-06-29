@@ -139,13 +139,21 @@ PROVIDERS = {
     "ollama-cloud": {                          # hosted big models via an API key
         "kind": "openai", "key_env": "OLLAMA_API_KEY",
         "base_url": "https://ollama.com/v1", "free": True,
-        "default_model": "gpt-oss:120b",
+        "default_model": "gpt-oss:120b",       # known-good default; many below need a sub
         "models": [
-            "gpt-oss:120b",
-            "gpt-oss:20b",
-            "deepseek-v3.1:671b",
-            "qwen3-coder:480b",
-            "glm-4.6",
+            # flagships / newest (several may require an Ollama Cloud subscription -> FAIL)
+            "glm-5.2", "glm-5.1", "glm-5", "glm-4.7",
+            "minimax-m3", "minimax-m2.7", "minimax-m2.5", "minimax-m2.1",
+            "kimi-k2.7-code", "kimi-k2.6", "kimi-k2.5",
+            "deepseek-v4-pro", "deepseek-v4-flash", "deepseek-v3.2", "deepseek-v3.1:671b",
+            "nemotron-3-ultra", "nemotron-3-super:120b", "nemotron-3-nano:30b",
+            "qwen3.5:122b", "qwen3.5:35b",
+            "qwen3-coder:480b", "qwen3-coder:30b", "qwen3-coder-next",
+            "gemma4:31b", "gemma4:12b", "gemma3:27b",
+            "gpt-oss:120b", "gpt-oss:20b",
+            "mistral-large-3", "ministral-3:14b",
+            "devstral-2:123b", "devstral-small-2:24b",
+            "gemini-3-flash-preview", "rnj-1:8b",
         ],
     },
     "openai": {

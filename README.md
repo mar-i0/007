@@ -81,10 +81,11 @@ $env:GROQ_API_KEY = "gsk_..."        # example: a free provider
 python 007.py --benchmark
 ```
 
-It probes **every model of every available provider** (~40 models across the 9 providers).
-Each probe does two things in one call: confirms the model answers, and asks it to call a
-trivial tool to check it actually supports **tool-calling** (this agent needs it). The
-table shows latency, `tools:yes/NO`, free/paid, or why a model was skipped:
+It probes **every model of every available provider** (~75 models across the 10 providers,
+most of them on `ollama-cloud`). Each probe does two things in one call: confirms the model
+answers, and asks it to call a trivial tool to check it actually supports **tool-calling**
+(this agent needs it). The table shows latency, `tools:yes/NO`, free/paid, or why a model
+was skipped:
 
 ```
 groq   llama-3.3-70b-versatile   OK   320 ms  tools:yes [free]
@@ -99,6 +100,13 @@ pick a number; it asks **¿Usarlo como predeterminado?** and, if yes, saves your
 Notes: the tool test is a heuristic (a capable model could still answer in text), and model
 IDs drift, so some rows may show `FAIL` — harmless, just pick a `tools:yes` one. The
 candidate list per provider lives in the `PROVIDERS` dict in `007.py`, easy to edit.
+
+`ollama-cloud` ships a large model list (GLM, MiniMax, Kimi, DeepSeek, Qwen, Nemotron,
+Gemma, gpt-oss, …). Many flagships need an Ollama Cloud subscription and will show
+`FAIL (403 … requires a subscription)`; the free-tier ones (e.g. `gpt-oss:120b/20b`,
+`qwen3-coder`) pass. With ~34 cloud models the benchmark takes longer — trim the list in
+`PROVIDERS["ollama-cloud"]["models"]` if you want it faster, and use plain `/models`
+(cached) instead of `/models retest` afterwards.
 
 ## 4. Run
 
