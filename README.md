@@ -34,6 +34,7 @@ Set the environment variable for whichever provider that machine allows. Most ar
 | `gemini` | ✅ | `GEMINI_API_KEY` | <https://aistudio.google.com/apikey> |
 | `openrouter` | ✅ (`:free` models) | `OPENROUTER_API_KEY` | <https://openrouter.ai/keys> |
 | `ollama` | ✅ local | *(none)* | run `ollama serve` locally |
+| `ollama-cloud` | ✅ (free tier) | `OLLAMA_API_KEY` | <https://ollama.com/settings/keys> |
 | `openai` | ❌ | `OPENAI_API_KEY` | <https://platform.openai.com/api-keys> |
 | `anthropic` | ❌ | `ANTHROPIC_API_KEY` | <https://console.anthropic.com> |
 | `mistral` | ❌ | `MISTRAL_API_KEY` | <https://console.mistral.ai> |

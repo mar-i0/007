@@ -4,7 +4,8 @@
 Optimised to run from PowerShell on Windows; also works on macOS/Linux.
 
 Providers (auto-detected from whichever API key / local server is present):
-    anthropic, openai, openrouter, groq, gemini, cerebras, mistral, deepseek, ollama
+    groq, cerebras, gemini, openrouter, ollama (local), ollama-cloud, openai,
+    anthropic, mistral, deepseek
 Most non-Anthropic providers share the OpenAI-compatible API, so one loop covers them all.
 
 Quick start (PowerShell):
@@ -118,6 +119,18 @@ PROVIDERS = {
         "base_url": "http://localhost:11434/v1", "free": True,
         "default_model": "llama3.2",
         "models": ["llama3.2", "llama3.1", "qwen2.5", "mistral"],
+    },
+    "ollama-cloud": {                          # hosted big models via an API key
+        "kind": "openai", "key_env": "OLLAMA_API_KEY",
+        "base_url": "https://ollama.com/v1", "free": True,
+        "default_model": "gpt-oss:120b",
+        "models": [
+            "gpt-oss:120b",
+            "gpt-oss:20b",
+            "deepseek-v3.1:671b",
+            "qwen3-coder:480b",
+            "glm-4.6",
+        ],
     },
     "openai": {
         "kind": "openai", "key_env": "OPENAI_API_KEY", "base_url": None, "free": False,
@@ -644,7 +657,7 @@ def list_providers():
         tag = "free " if prov.get("free") else "paid "
         key = prov.get("key_env") or "(local, no key)"
         mark = "available" if is_available(name) else "not set"
-        print("  {:<11} {} {:<22} {:>2} models  [{}]".format(
+        print("  {:<13} {} {:<22} {:>2} models  [{}]".format(
             name, tag, key, len(_models_of(prov)), mark))
     print("\nKeys file: keys.env (next to the script).  Config: {}".format(CONFIG_PATH))
 
@@ -662,7 +675,7 @@ def run_benchmark():
         if not is_available(name):
             reason = "local server not reachable" if prov.get("local") \
                 else "no {}".format(prov.get("key_env"))
-            print("  {:<11} -- skipped ({})".format(name, reason))
+            print("  {:<13} -- skipped ({})".format(name, reason))
             continue
         for model in _models_of(prov):
             ok, ms, tools_ok, note = probe(name, model)
@@ -670,7 +683,7 @@ def run_benchmark():
                 status = "OK {:>5} ms  tools:{}".format(ms, "yes" if tools_ok else "NO ")
             else:
                 status = "FAIL ({})".format(note)
-            print("  {:<11} {:<46} {} {}".format(
+            print("  {:<13} {:<46} {} {}".format(
                 name, model, status, "[free]" if free else "[paid]"))
             rows.append((name, model, ok, ms, note, free, tools_ok))
 
