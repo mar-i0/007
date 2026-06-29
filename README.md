@@ -159,6 +159,12 @@ Runs headless by default; set `BROWSER_HEADLESS = False` near the top of `007.py
 the window. The browser starts lazily, so you only need Playwright installed if you browse.
 This gives **every** provider real web access, not just Anthropic.
 
+Built-in robustness: a realistic user-agent + viewport (`BROWSER_USER_AGENT`), a best-effort
+wait for the network to settle, automatic dismissal of cookie/consent banners
+(`AUTO_DISMISS_COOKIES = True`, scans the page and iframes for an "Accept/Aceptar" button),
+and tolerant navigation that keeps partial content on slow sites and retries once after a
+failed load instead of crashing. A genuinely unreachable URL returns a clear `Error navigating: …`.
+
 **If browsing "doesn't work":** it's usually one of these, not a bug —
 1. **The model isn't choosing the browser tools** (it tries `curl`/`w3m` in `run_shell`, or
    passes a URL to `read_file`). Small models do this; the system prompt now steers against

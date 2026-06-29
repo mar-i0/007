@@ -45,7 +45,12 @@ SHELL_NAME = "PowerShell" if IS_WINDOWS else "bash"
 WORKDIR = os.getcwd()
 CONFIG_PATH = os.path.join(os.path.expanduser("~"), ".007.json")
 
-BROWSER_HEADLESS = True    # set False to watch the Playwright browser window
+BROWSER_HEADLESS = True       # set False to watch the Playwright browser window
+AUTO_DISMISS_COOKIES = True   # best-effort click on cookie/consent "accept" buttons
+BROWSER_USER_AGENT = (        # realistic UA reduces bot-blocking
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+    "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
+)
 PAGE_TEXT_LIMIT = 6000     # max chars of page text returned to the model
 TOOL_OUTPUT_LIMIT = 8000   # max chars of any tool result sent back to the model
                            # (keeps big files/pages from blowing small models' token limits)
@@ -289,8 +294,75 @@ def _get_page():
             )
         pw = sync_playwright().start()
         browser = pw.chromium.launch(headless=BROWSER_HEADLESS)
-        _BROWSER.update(pw=pw, browser=browser, page=browser.new_page())
+        context = browser.new_context(
+            user_agent=BROWSER_USER_AGENT,
+            viewport={"width": 1366, "height": 900},
+            locale="es-ES",
+        )
+        _BROWSER.update(pw=pw, browser=browser, page=context.new_page())
     return _BROWSER["page"]
+
+
+def _settle(page):
+    """Best-effort wait for the network to go quiet; never raises."""
+    try:
+        page.wait_for_load_state("networkidle", timeout=4000)
+    except Exception:
+        pass
+
+
+def _navigate(page, url):
+    """Go to url, tolerating slow/partial loads. Returns (ok, error). Retries once
+    to absorb the 'interrupted by another navigation' race after a prior failure."""
+    err = ""
+    for _ in range(2):
+        before = page.url or ""
+        try:
+            page.goto(url, wait_until="domcontentloaded", timeout=45000)
+            return True, ""
+        except Exception as e:
+            err = str(e).splitlines()[0]
+            _settle(page)
+            cur = page.url or ""
+            # success-in-disguise only if we actually moved to a real, different page
+            # (e.g. a slow site where domcontentloaded timed out but content loaded).
+            if cur and cur != before and cur != "about:blank" \
+                    and not cur.startswith("chrome-error"):
+                return True, ""
+    return False, err
+
+
+_COOKIE_TEXTS = [
+    "Aceptar todo", "Aceptar todas", "Aceptar y continuar", "Aceptar",
+    "Accept all", "Accept All", "Accept", "I agree", "Agree", "Allow all",
+    "Got it", "Entendido", "OK", "Consent",
+]
+
+
+def _dismiss_cookies(page):
+    """Best-effort click on a cookie/consent 'accept' button (main page + iframes)."""
+    try:
+        frames = list(page.frames)
+    except Exception:
+        frames = [page]
+    for frame in frames[:6]:                       # bound the search
+        for text in _COOKIE_TEXTS:
+            try:
+                btn = frame.get_by_role("button", name=text, exact=False).first
+                if btn.is_visible():
+                    btn.click(timeout=1500)
+                    return True
+            except Exception:
+                continue
+    for sel in ("#onetrust-accept-btn-handler", "button[aria-label*='accept' i]"):
+        try:
+            el = page.locator(sel).first
+            if el.is_visible():
+                el.click(timeout=1500)
+                return True
+        except Exception:
+            continue
+    return False
 
 
 def _page_summary(page):
@@ -302,7 +374,9 @@ def _page_summary(page):
         text = page.inner_text("body").strip()
     except Exception:
         text = ""
-    if len(text) > PAGE_TEXT_LIMIT:
+    if not text:
+        text = "(no extractable text on the page)"
+    elif len(text) > PAGE_TEXT_LIMIT:
         text = text[:PAGE_TEXT_LIMIT] + "\n... [truncated]"
     return "URL: {}\nTitle: {}\n\n{}".format(page.url, title, text)
 
@@ -354,7 +428,12 @@ def _run_tool(name, tool_input):
             return _run_shell(cmd)
         if name == "browser_navigate":
             page = _get_page()
-            page.goto(tool_input["url"], wait_until="domcontentloaded", timeout=30000)
+            ok, err = _navigate(page, tool_input["url"])
+            if not ok:
+                return "Error navigating: {}".format(err)
+            _settle(page)
+            if AUTO_DISMISS_COOKIES and _dismiss_cookies(page):
+                _settle(page)
             return _page_summary(page)
         if name == "browser_read":
             if _BROWSER["page"] is None:
@@ -369,7 +448,7 @@ def _run_tool(name, tool_input):
                 page.get_by_text(target, exact=False).first.click(timeout=8000)
             except Exception:
                 page.click(target, timeout=8000)          # fall back to CSS selector
-            page.wait_for_load_state("domcontentloaded", timeout=15000)
+            _settle(page)
             return _page_summary(page)
         if name == "browser_type":
             sel, txt = tool_input["selector"], tool_input["text"]
@@ -380,7 +459,7 @@ def _run_tool(name, tool_input):
             page.fill(sel, txt, timeout=8000)
             if submit:
                 page.press(sel, "Enter")
-                page.wait_for_load_state("domcontentloaded", timeout=15000)
+                _settle(page)
             return _page_summary(page)
         return "Unknown tool: " + name
     except Exception as e:                      # return errors to the model, don't crash
