@@ -1,13 +1,18 @@
 #!/usr/bin/env python3
-"""mini agent - single-file, cross-platform tool-calling harness (Anthropic or OpenAI).
+"""007 - single-file, cross-platform tool-calling agent for many model providers.
 
 Optimised to run from PowerShell on Windows; also works on macOS/Linux.
 
+Providers (auto-detected from whichever API key / local server is present):
+    anthropic, openai, openrouter, groq, gemini, cerebras, mistral, deepseek, ollama
+Most non-Anthropic providers share the OpenAI-compatible API, so one loop covers them all.
+
 Quick start (PowerShell):
-    pip install --user anthropic         # or: pip install --user openai
-    $env:ANTHROPIC_API_KEY = "sk-ant-..."    # or: $env:OPENAI_API_KEY = "sk-..."
-    python 007.py                         # auto-picks the provider whose key is set
-    python 007.py --provider openai       # or force one
+    pip install --user openai anthropic         # install what you need
+    $env:GROQ_API_KEY = "..."                    # or any provider's key (see --list)
+    python 007.py --benchmark                    # test available models, pick & save a default
+    python 007.py                                # use the saved / auto-detected default
+    python 007.py --provider groq --model llama-3.3-70b-versatile   # force one
 
 Tools: read_file, write_file, run_shell, browser_* (Playwright web browsing),
 and native web search on Anthropic. write_file, run_shell, browser_click and
@@ -23,6 +28,7 @@ import platform
 import shutil
 import subprocess
 import sys
+import time
 
 # Force UTF-8 on the console so non-ASCII output (e.g. Spanish accents) never
 # raises UnicodeEncodeError under Windows PowerShell / cmd.
@@ -35,12 +41,10 @@ for _stream in (sys.stdin, sys.stdout, sys.stderr):
 IS_WINDOWS = platform.system() == "Windows"
 SHELL_NAME = "PowerShell" if IS_WINDOWS else "bash"
 WORKDIR = os.getcwd()
+CONFIG_PATH = os.path.join(os.path.expanduser("~"), ".007.json")
 
 BROWSER_HEADLESS = True    # set False to watch the Playwright browser window
 PAGE_TEXT_LIMIT = 6000     # max chars of page text returned to the model
-
-ANTHROPIC_MODEL = "claude-opus-4-8"    # or claude-sonnet-4-6 / claude-haiku-4-5
-OPENAI_MODEL = "gpt-4o"                # or gpt-4.1 / o4-mini - whatever your key has
 
 SYSTEM = (
     "You are a helpful work assistant running on the user's laptop. "
@@ -48,6 +52,60 @@ SYSTEM = (
     "a real browser (browser_navigate / browser_read / browser_click / browser_type). "
     "Be concise. Prefer doing the work over describing it."
 ).format(SHELL_NAME)
+
+
+# --------------------------------------------------------------------------- #
+# Provider registry
+# --------------------------------------------------------------------------- #
+# kind: "anthropic" or "openai" (OpenAI-compatible). To add any other
+# OpenAI-compatible endpoint (e.g. Together, Fireworks, a company gateway),
+# just append an entry here.
+
+PROVIDERS = {
+    "groq": {
+        "kind": "openai", "key_env": "GROQ_API_KEY",
+        "base_url": "https://api.groq.com/openai/v1",
+        "default_model": "llama-3.3-70b-versatile", "free": True,
+    },
+    "cerebras": {
+        "kind": "openai", "key_env": "CEREBRAS_API_KEY",
+        "base_url": "https://api.cerebras.ai/v1",
+        "default_model": "llama-3.3-70b", "free": True,
+    },
+    "gemini": {
+        "kind": "openai", "key_env": "GEMINI_API_KEY",
+        "base_url": "https://generativelanguage.googleapis.com/v1beta/openai/",
+        "default_model": "gemini-2.0-flash", "free": True,
+    },
+    "openrouter": {
+        "kind": "openai", "key_env": "OPENROUTER_API_KEY",
+        "base_url": "https://openrouter.ai/api/v1",
+        "default_model": "meta-llama/llama-3.3-70b-instruct:free", "free": True,
+    },
+    "ollama": {
+        "kind": "openai", "key_env": None, "local": True,
+        "base_url": "http://localhost:11434/v1",
+        "default_model": "llama3.2", "free": True,
+    },
+    "openai": {
+        "kind": "openai", "key_env": "OPENAI_API_KEY",
+        "base_url": None, "default_model": "gpt-4o", "free": False,
+    },
+    "anthropic": {
+        "kind": "anthropic", "key_env": "ANTHROPIC_API_KEY",
+        "default_model": "claude-opus-4-8", "free": False,
+    },
+    "mistral": {
+        "kind": "openai", "key_env": "MISTRAL_API_KEY",
+        "base_url": "https://api.mistral.ai/v1",
+        "default_model": "mistral-large-latest", "free": False,
+    },
+    "deepseek": {
+        "kind": "openai", "key_env": "DEEPSEEK_API_KEY",
+        "base_url": "https://api.deepseek.com",
+        "default_model": "deepseek-chat", "free": False,
+    },
+}
 
 
 # --------------------------------------------------------------------------- #
@@ -250,7 +308,7 @@ def execute_tool(name, tool_input):
 
 
 # --------------------------------------------------------------------------- #
-# Anthropic provider
+# Anthropic loop
 # --------------------------------------------------------------------------- #
 
 ANTHROPIC_TOOLS = [
@@ -299,7 +357,7 @@ def run_anthropic(client, messages, model):
 
 
 # --------------------------------------------------------------------------- #
-# OpenAI provider (Chat Completions + function calling)
+# OpenAI-compatible loop (OpenAI, OpenRouter, Groq, Gemini, Ollama, ...)
 # --------------------------------------------------------------------------- #
 
 OPENAI_TOOLS = [
@@ -364,45 +422,263 @@ def run_openai(client, messages, model):
 
 
 # --------------------------------------------------------------------------- #
+# Provider plumbing: availability, clients, config, benchmark
+# --------------------------------------------------------------------------- #
+
+def _key_for(prov):
+    if prov.get("key_env"):
+        return os.environ.get(prov["key_env"], "")
+    return "local"            # local servers ignore the key but the SDK needs one
+
+
+def _local_reachable(base_url):
+    import socket
+    try:
+        from urllib.parse import urlparse
+        u = urlparse(base_url)
+        host = u.hostname or "localhost"
+        port = u.port or (443 if u.scheme == "https" else 80)
+        with socket.create_connection((host, port), timeout=0.6):
+            return True
+    except Exception:
+        return False
+
+
+def is_available(name):
+    prov = PROVIDERS[name]
+    if prov.get("local"):
+        return _local_reachable(prov["base_url"])
+    return bool(os.environ.get(prov.get("key_env") or "", ""))
+
+
+def make_client(name, timeout=None):
+    prov = PROVIDERS[name]
+    # When timeout is set we're benchmarking: also drop retries so a dead
+    # endpoint fails fast instead of retrying 2-3 times.
+    extra = {"timeout": timeout, "max_retries": 0} if timeout else {}
+    if prov["kind"] == "anthropic":
+        import anthropic
+        return anthropic.Anthropic(**extra)
+    from openai import OpenAI
+    kwargs = {"api_key": _key_for(prov) or "none"}
+    if prov.get("base_url"):
+        kwargs["base_url"] = prov["base_url"]
+    kwargs.update(extra)
+    return OpenAI(**kwargs)
+
+
+def _keys_file_paths():
+    here = os.path.dirname(os.path.abspath(__file__))
+    candidates = [
+        os.path.join(here, "keys.env"),
+        os.path.join(WORKDIR, "keys.env"),
+        os.path.join(os.path.expanduser("~"), ".007.keys"),
+    ]
+    seen, out = set(), []
+    for p in candidates:                       # de-duplicate (here may == WORKDIR)
+        if p not in seen:
+            seen.add(p)
+            out.append(p)
+    return out
+
+
+def load_keys_file():
+    """Read API keys from a simple KEY=value file and put them in the env.
+
+    Real environment variables take precedence (we only fill in missing ones),
+    so a key already exported in the shell is never overridden.
+    """
+    for path in _keys_file_paths():
+        if not os.path.isfile(path):
+            continue
+        try:
+            with open(path, "r", encoding="utf-8") as f:
+                for line in f:
+                    line = line.strip()
+                    if not line or line.startswith("#"):
+                        continue
+                    if line.lower().startswith("export "):
+                        line = line[7:].strip()
+                    if "=" not in line:
+                        continue
+                    key, val = line.split("=", 1)
+                    key, val = key.strip(), val.strip().strip('"').strip("'")
+                    if key and val:
+                        os.environ.setdefault(key, val)
+        except Exception as e:
+            print("[warn] could not read {}: {}".format(path, e))
+        return path                            # stop at the first file that exists
+    return None
+
+
+def load_config():
+    try:
+        with open(CONFIG_PATH, "r", encoding="utf-8") as f:
+            return json.load(f)
+    except Exception:
+        return {}
+
+
+def save_config(provider, model):
+    try:
+        with open(CONFIG_PATH, "w", encoding="utf-8") as f:
+            json.dump({"provider": provider, "model": model}, f, indent=2)
+        return True
+    except Exception as e:
+        print("[warn] could not save config: {}".format(e))
+        return False
+
+
+def ping(name, model):
+    """Send a tiny request; return (ok, latency_ms, note)."""
+    prov = PROVIDERS[name]
+    t0 = time.time()
+    try:
+        client = make_client(name, timeout=20)
+        if prov["kind"] == "anthropic":
+            client.messages.create(
+                model=model, max_tokens=16,
+                messages=[{"role": "user", "content": "Reply with OK"}],
+            )
+        else:
+            client.chat.completions.create(
+                model=model,
+                messages=[{"role": "user", "content": "Reply with OK"}],
+            )
+        return True, int((time.time() - t0) * 1000), ""
+    except Exception as e:
+        return False, int((time.time() - t0) * 1000), str(e).splitlines()[0][:90]
+
+
+def list_providers():
+    print("Providers (set the matching env var to enable one):\n")
+    for name, prov in PROVIDERS.items():
+        tag = "free " if prov.get("free") else "paid "
+        key = prov.get("key_env") or "(local, no key)"
+        mark = "available" if is_available(name) else "not set"
+        print("  {:<11} {} {:<22} -> {:<10} [{}]".format(
+            name, tag, key, prov["default_model"], mark))
+    print("\nConfig file: {}".format(CONFIG_PATH))
+
+
+def run_benchmark():
+    """Ping every available provider's default model; print a ranked table.
+
+    Returns (working_rows, suggestion) where each row is
+    (name, model, ok, ms, note, free).
+    """
+    print("Checking available providers (this calls each one once)...\n")
+    rows = []
+    for name, prov in PROVIDERS.items():
+        model = prov["default_model"]
+        free = bool(prov.get("free"))
+        if not is_available(name):
+            reason = "local server not reachable" if prov.get("local") \
+                else "no {}".format(prov.get("key_env"))
+            print("  {:<11} {:<34} -- skipped ({})".format(name, model, reason))
+            continue
+        ok, ms, note = ping(name, model)
+        status = "OK  {:>5} ms".format(ms) if ok else "FAIL ({})".format(note)
+        print("  {:<11} {:<34} {} {}".format(
+            name, model, status, "[free]" if free else "[paid]"))
+        rows.append((name, model, ok, ms, note, free))
+
+    working = [r for r in rows if r[2]]
+    free_working = sorted([r for r in working if r[5]], key=lambda r: r[3])
+    any_working = sorted(working, key=lambda r: r[3])
+    suggestion = free_working[0] if free_working else (any_working[0] if any_working else None)
+    return working, suggestion
+
+
+def choose_via_benchmark():
+    working, suggestion = run_benchmark()
+    if not working:
+        print("\nNo provider is available. Set an API key (see --list) and retry.")
+        sys.exit(1)
+
+    print("\nWorking models:")
+    for i, r in enumerate(working, 1):
+        star = "  <- suggested" if r is suggestion else ""
+        print("  [{}] {} / {}   {} ms   ({}){}".format(
+            i, r[0], r[1], r[3], "free" if r[5] else "paid", star))
+
+    raw = input("\nChoose a number (Enter = suggested): ").strip()
+    choice = suggestion
+    if raw:
+        try:
+            choice = working[int(raw) - 1]
+        except Exception:
+            print("Invalid choice; using the suggestion.")
+    provider, model = choice[0], choice[1]
+
+    ans = input("\n¿Usarlo como predeterminado? [y/N] ").strip().lower()
+    if ans == "y":
+        if save_config(provider, model):
+            print("Saved as default in {}".format(CONFIG_PATH))
+    return provider, model
+
+
+# --------------------------------------------------------------------------- #
 # Entry point
 # --------------------------------------------------------------------------- #
 
-def pick_provider(explicit):
-    if explicit:
-        return explicit
-    if os.environ.get("ANTHROPIC_API_KEY"):
-        return "anthropic"
-    if os.environ.get("OPENAI_API_KEY"):
-        return "openai"
-    return "anthropic"            # default; fails with a clear auth error if no key
+def resolve(args):
+    """Decide (provider, model) from flags, then config, then auto-detect."""
+    if args.benchmark:
+        return choose_via_benchmark()
+    if args.provider:
+        return args.provider, (args.model or PROVIDERS[args.provider]["default_model"])
+
+    cfg = load_config()
+    if cfg.get("provider") in PROVIDERS:
+        return cfg["provider"], (args.model or cfg.get("model")
+                                 or PROVIDERS[cfg["provider"]]["default_model"])
+
+    avail = [n for n in PROVIDERS if is_available(n)]
+    if avail:
+        free_avail = [n for n in avail if PROVIDERS[n].get("free")]
+        name = (free_avail or avail)[0]
+        return name, (args.model or PROVIDERS[name]["default_model"])
+
+    return "anthropic", (args.model or PROVIDERS["anthropic"]["default_model"])
 
 
 def main():
-    parser = argparse.ArgumentParser(
-        description="single-file Claude/OpenAI tool-calling agent"
-    )
-    parser.add_argument(
-        "--provider", choices=["anthropic", "openai"], default=None,
-        help="force a provider (default: auto-detect from whichever key is set)",
-    )
+    parser = argparse.ArgumentParser(description="single-file multi-provider tool-calling agent")
+    parser.add_argument("--provider", choices=list(PROVIDERS), default=None,
+                        help="force a provider (default: saved config, else auto-detect)")
+    parser.add_argument("--model", default=None, help="override the model id")
+    parser.add_argument("--benchmark", action="store_true",
+                        help="test available providers, suggest one, and offer to save it")
+    parser.add_argument("--list", action="store_true",
+                        help="list providers and which are available, then exit")
     args = parser.parse_args()
-    provider = pick_provider(args.provider)
 
-    if provider == "anthropic":
-        import anthropic                       # lazy: only the chosen SDK is required
-        client = anthropic.Anthropic()         # reads ANTHROPIC_API_KEY / auth token
-        model, runner, messages = ANTHROPIC_MODEL, run_anthropic, []
-        speaker = "Anthropic"
+    loaded = load_keys_file()                  # fill env from keys.env if present
+    if loaded:
+        print("Loaded keys from {}".format(loaded))
+
+    if args.list:
+        list_providers()
+        return
+
+    provider, model = resolve(args)
+
+    try:
+        client = make_client(provider)
+    except ImportError as e:
+        sdk = "anthropic" if PROVIDERS[provider]["kind"] == "anthropic" else "openai"
+        print("Missing SDK for '{}': {}. Run: pip install --user {}".format(provider, e, sdk))
+        return
+
+    if PROVIDERS[provider]["kind"] == "anthropic":
+        runner, messages = run_anthropic, []
     else:
-        from openai import OpenAI              # lazy: only the chosen SDK is required
-        client = OpenAI()                      # reads OPENAI_API_KEY
-        model, runner = OPENAI_MODEL, run_openai
-        messages = [{"role": "system", "content": SYSTEM}]
-        speaker = "OpenAI"
+        runner, messages = run_openai, [{"role": "system", "content": SYSTEM}]
 
     quit_hint = "Ctrl-Z then Enter" if IS_WINDOWS else "Ctrl-D"
-    print("Mini agent ready ({} {}). Type a request; {} to quit.".format(
-        speaker, model, quit_hint))
+    print("007 ready ({} / {}). Type a request; {} to quit.".format(
+        provider, model, quit_hint))
     while True:
         try:
             user = input("\nYou: ").strip()
@@ -412,7 +688,10 @@ def main():
         if not user:
             continue
         messages.append({"role": "user", "content": user})
-        runner(client, messages, model)
+        try:
+            runner(client, messages, model)
+        except Exception as e:               # never crash the REPL on a provider hiccup
+            print("\n[error] {}".format(e))
 
 
 if __name__ == "__main__":

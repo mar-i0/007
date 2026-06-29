@@ -1,15 +1,18 @@
-# mini agent
+# 007 — multi-provider tool-calling agent
 
-A single-file, cross-platform Python harness that lets **Claude (Anthropic)** or
-**OpenAI** help with your work through tool-calling: read and write files, run shell
-commands, **browse the web with a real browser (Playwright)**, and (Anthropic) use
-native web search. One file — `007.py` — meant to be read and modified. Optimised to
-run from **PowerShell on Windows**; also works on macOS/Linux.
+A single-file, cross-platform Python agent that works with **many model providers**
+(several with free tiers) and helps with your work through tool-calling: read and write
+files, run shell commands, **browse the web with a real browser (Playwright)**, and use
+native web search on Anthropic. One file — `007.py` — meant to be read and modified.
+Optimised to run from **PowerShell on Windows**; also works on macOS/Linux.
+
+Built for the reality that different machines allow different providers: set whatever key
+that machine has, run `--benchmark`, and it tells you what works and lets you save a default.
 
 ## 1. Install
 
 ```powershell
-pip install --user anthropic     # or: pip install --user openai  (install only what you use)
+pip install --user openai anthropic    # openai covers most providers; anthropic for Claude
 ```
 
 For the web-browsing tools (optional), also install Playwright and its browser:
@@ -19,42 +22,75 @@ pip install --user playwright
 python -m playwright install chromium
 ```
 
-Verify:
+## 2. Providers & keys
 
-```powershell
-python -c "import sys; print(sys.version)"
+Set the environment variable for whichever provider that machine allows. Most are
+**OpenAI-API-compatible**, so one code path covers them all.
+
+| Provider | Free tier | Env var | Get a key |
+|----------|-----------|---------|-----------|
+| `groq` | ✅ | `GROQ_API_KEY` | <https://console.groq.com> |
+| `cerebras` | ✅ | `CEREBRAS_API_KEY` | <https://cloud.cerebras.ai> |
+| `gemini` | ✅ | `GEMINI_API_KEY` | <https://aistudio.google.com/apikey> |
+| `openrouter` | ✅ (`:free` models) | `OPENROUTER_API_KEY` | <https://openrouter.ai/keys> |
+| `ollama` | ✅ local | *(none)* | run `ollama serve` locally |
+| `openai` | ❌ | `OPENAI_API_KEY` | <https://platform.openai.com/api-keys> |
+| `anthropic` | ❌ | `ANTHROPIC_API_KEY` | <https://console.anthropic.com> |
+| `mistral` | ❌ | `MISTRAL_API_KEY` | <https://console.mistral.ai> |
+| `deepseek` | ❌ | `DEEPSEEK_API_KEY` | <https://platform.deepseek.com> |
+
+### Easiest: the `keys.env` file (recommended for throwaway keys)
+
+Instead of fiddling with environment variables, just edit **`keys.env`** (next to `007.py`)
+and paste your keys — `007.py` reads it automatically on startup:
+
+```ini
+# keys.env  — remove the "#" and paste your key
+GROQ_API_KEY=gsk_...
+GEMINI_API_KEY=AIza...
+# OPENAI_API_KEY=sk-...
 ```
 
-## 2. Set your API key
+- Format is `NAME=value`, one per line; `#` lines and blanks are ignored; no quotes needed.
+- It's **git-ignored**, so your keys are never pushed. A `keys.env.example` template is in
+  the repo (copy it to `keys.env` if it's missing).
+- Searched in: the script's folder, the current folder, then `~/.007.keys`.
+- Real environment variables (below) take precedence if both are set.
 
-Each provider reads its key from the environment. In **PowerShell**:
+### Or environment variables
+
+In **PowerShell** (current session, or `setx ...` + new window to persist):
 
 ```powershell
-$env:ANTHROPIC_API_KEY = "sk-ant-..."     # Anthropic
-$env:OPENAI_API_KEY    = "sk-..."         # OpenAI
+$env:GROQ_API_KEY = "gsk_..."        # example: a free provider
 ```
 
-That sets it for the current session. To persist it across sessions:
+`python 007.py --list` shows every provider and which ones are currently available.
+
+> **Anthropic note:** a Claude.ai / Claude Code subscription is a *separate* product and
+> doesn't grant API access — you need an API key, or the `ant` CLI (`ant auth login`) for
+> subscription OAuth.
+>
+> **Adding more providers** is one entry in the `PROVIDERS` dict in `007.py` (`name`,
+> `base_url`, `key_env`, `default_model`) — any OpenAI-compatible endpoint works.
+
+## 3. Pick a model with `--benchmark`
 
 ```powershell
-setx ANTHROPIC_API_KEY "sk-ant-..."        # then open a NEW PowerShell window
+python 007.py --benchmark
 ```
 
-(macOS/Linux: `export ANTHROPIC_API_KEY="sk-ant-..."`)
+It pings every available provider's default model once, prints a ranked table (latency,
+free/paid, or why it was skipped), and **suggests one** (fastest free that works). You pick
+a number; it then asks **¿Usarlo como predeterminado?** and, if yes, saves your choice to
+`~/.007.json` so future runs start there automatically.
 
-### Anthropic note
-
-A Claude.ai / Claude Code subscription is a *separate* product and doesn't grant API
-access on its own — you need an API key from <https://console.anthropic.com> (billed
-pay-as-you-go). Alternatively, the official `ant` CLI (`ant auth login`) lets the SDK
-ride your subscription via OAuth; that needs one extra binary installed and is more
-fragile. OpenAI keys come from <https://platform.openai.com/api-keys>.
-
-## 3. Run
+## 4. Run
 
 ```powershell
-python 007.py                    # auto-picks the provider whose key is set
-python 007.py --provider openai  # or force one
+python 007.py                          # saved default, else auto-detect (free first)
+python 007.py --provider groq          # force a provider (uses its default model)
+python 007.py --provider openrouter --model "qwen/qwen-2.5-72b-instruct:free"
 ```
 
 Type a request; quit with **Ctrl-Z then Enter** (Windows) or **Ctrl-D** (macOS/Linux).
@@ -64,7 +100,6 @@ Examples:
 - `List the files here.` → runs a shell command (asks to confirm first)
 - `Create hello.txt saying hi.` → writes a file (asks to confirm first)
 - `Open example.com and summarise it.` → real browser via Playwright
-- `Search the web for today's date.` → native web search (**Anthropic only**, see Notes)
 
 The conversation has memory within a session, so follow-ups work.
 
@@ -75,8 +110,6 @@ The conversation has memory within a session, so follow-ups work.
   once, or use **PowerShell 7 / Windows Terminal**.
 - **`run_shell` runs PowerShell** on Windows (`pwsh` if present, else `powershell`) and
   bash/sh on macOS/Linux — so the model writes commands for the shell you're actually on.
-- Provider auto-detect uses whichever of `ANTHROPIC_API_KEY` / `OPENAI_API_KEY` is set;
-  `--provider` overrides.
 
 ## Web browsing (Playwright)
 
@@ -88,30 +121,32 @@ Four tools drive a real Chromium browser, with one persistent browser per sessio
 - `browser_type(selector, text, enter?)` — fill an input, optionally submit (asks to confirm).
 
 Runs headless by default; set `BROWSER_HEADLESS = False` near the top of `007.py` to watch
-the window. The browser starts lazily on first use, so you only need Playwright installed
-if you actually browse. This also gives **OpenAI** real web access (it has no native search).
+the window. The browser starts lazily, so you only need Playwright installed if you browse.
+This gives **every** provider real web access, not just Anthropic.
 
 ## Safety gate
 
 `write_file`, `run_shell`, `browser_click` and `browser_type` ask `[y/N]` before acting
-(these are the state-changing / outward-facing actions). Answer `n` to decline — the model
-is told and adapts. `read_file`, `browser_navigate`, `browser_read` and Anthropic's
-`web_search` run without prompting.
+(the state-changing / outward-facing actions). Answer `n` to decline — the model is told
+and adapts. `read_file`, `browser_navigate`, `browser_read` and Anthropic's `web_search`
+run without prompting.
 
 ## Add your own tool
 
-1. Append a spec to `TOOL_SPECS` (`name`, `description`, `parameters`) — both providers
-   pick it up automatically.
+1. Append a spec to `TOOL_SPECS` (`name`, `description`, `parameters`) — every provider
+   picks it up automatically.
 2. Add a matching `if name == "your_tool":` branch in `execute_tool` that returns a string.
 
 ## Notes
 
-- **Models** are constants near the top of `007.py`: `ANTHROPIC_MODEL`
-  (`claude-opus-4-8` → `claude-sonnet-4-6`/`claude-haiku-4-5` for less cost) and
-  `OPENAI_MODEL` (`gpt-4o` → `gpt-4.1`, `o4-mini`, whatever your key has).
-- **Web access**: both providers can browse via the Playwright `browser_*` tools.
-  Anthropic additionally has a native server-side `web_search` tool (faster for quick
-  lookups); OpenAI has no native search here, so it relies on browsing.
+- **Default models** live in the `PROVIDERS` dict in `007.py`; override per-run with
+  `--model`, or save a default via `--benchmark`.
+- **Tool-calling quality varies by model.** The agent relies on function calling; big
+  instruction-tuned models (Llama 3.3 70B, GPT-4o, Claude, Gemini, DeepSeek) handle it
+  well, smaller/local models less so. If a model ignores tools or errors on them, pick a
+  stronger one — the REPL won't crash, it prints `[error]` and waits for your next message.
+- **Web search**: Anthropic has a native server-side `web_search` tool (fast lookups);
+  other providers use the Playwright `browser_*` tools instead.
 - **OpenAI `max_tokens`** is omitted on purpose so the loop works across model families
   (o-series / newer models reject it in favour of `max_completion_tokens`).
 - Both loops are non-streaming for simplicity. Streaming, directory sandboxing for the
