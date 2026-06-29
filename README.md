@@ -80,14 +80,24 @@ $env:GROQ_API_KEY = "gsk_..."        # example: a free provider
 python 007.py --benchmark
 ```
 
-It pings **every model of every available provider** (~40 models across the 9 providers),
-prints a ranked table (latency, free/paid, or why it was skipped), and **suggests one**
-(fastest free that works). You pick a number; it then asks **¿Usarlo como predeterminado?**
-and, if yes, saves your choice to `~/.007.json` so future runs start there automatically.
+It probes **every model of every available provider** (~40 models across the 9 providers).
+Each probe does two things in one call: confirms the model answers, and asks it to call a
+trivial tool to check it actually supports **tool-calling** (this agent needs it). The
+table shows latency, `tools:yes/NO`, free/paid, or why a model was skipped:
 
-Model IDs drift over time, so some may show `FAIL` — that's harmless; just pick a working
-one. The full candidate list per provider lives in the `PROVIDERS` dict in `007.py`, easy
-to trim or extend.
+```
+groq   llama-3.3-70b-versatile   OK   320 ms  tools:yes [free]
+groq   gemma2-9b-it              OK   300 ms  tools:NO  [free]
+openai gpt-4o                    OK   150 ms  tools:yes [paid]
+```
+
+The **suggestion** prefers models that pass the tool test, free first, then fastest. You
+pick a number; it asks **¿Usarlo como predeterminado?** and, if yes, saves your choice to
+`~/.007.json` so future runs start there automatically.
+
+Notes: the tool test is a heuristic (a capable model could still answer in text), and model
+IDs drift, so some rows may show `FAIL` — harmless, just pick a `tools:yes` one. The
+candidate list per provider lives in the `PROVIDERS` dict in `007.py`, easy to edit.
 
 ## 4. Run
 

@@ -570,25 +570,68 @@ def save_config(provider, model):
         return False
 
 
-def ping(name, model):
-    """Send a tiny request; return (ok, latency_ms, note)."""
+# A trivial tool the model is asked to call, to check real tool-calling support.
+_PROBE_PROMPT = ("You have a tool called get_magic_number. Call it now to get the "
+                 "number. Respond with the tool call only, not text.")
+_PROBE_TOOL_OPENAI = [{
+    "type": "function",
+    "function": {
+        "name": "get_magic_number",
+        "description": "Returns the magic number. Call this to obtain it.",
+        "parameters": {"type": "object", "properties": {}, "required": []},
+    },
+}]
+_PROBE_TOOL_ANTHROPIC = [{
+    "name": "get_magic_number",
+    "description": "Returns the magic number. Call this to obtain it.",
+    "input_schema": {"type": "object", "properties": {}},
+}]
+
+
+def _plain_ok(name, model):
+    """Connectivity-only fallback when the tools request itself errors."""
+    prov = PROVIDERS[name]
+    client = make_client(name, timeout=25)
+    if prov["kind"] == "anthropic":
+        client.messages.create(model=model, max_tokens=16,
+                               messages=[{"role": "user", "content": "Reply with OK"}])
+    else:
+        client.chat.completions.create(
+            model=model, messages=[{"role": "user", "content": "Reply with OK"}])
+
+
+def probe(name, model):
+    """One call that tests chat + tool-calling.
+
+    Returns (ok, latency_ms, tools_ok, note):
+      ok       - the model is reachable and answered
+      tools_ok - it emitted a tool call when asked to
+      note     - 'no tools' if reachable but tool-calling failed, else an error
+    """
     prov = PROVIDERS[name]
     t0 = time.time()
     try:
-        client = make_client(name, timeout=20)
+        client = make_client(name, timeout=25)
         if prov["kind"] == "anthropic":
-            client.messages.create(
-                model=model, max_tokens=16,
-                messages=[{"role": "user", "content": "Reply with OK"}],
+            resp = client.messages.create(
+                model=model, max_tokens=128, tools=_PROBE_TOOL_ANTHROPIC,
+                messages=[{"role": "user", "content": _PROBE_PROMPT}],
             )
+            tools_ok = any(getattr(b, "type", None) == "tool_use" for b in resp.content)
         else:
-            client.chat.completions.create(
-                model=model,
-                messages=[{"role": "user", "content": "Reply with OK"}],
+            resp = client.chat.completions.create(
+                model=model, tools=_PROBE_TOOL_OPENAI,
+                messages=[{"role": "user", "content": _PROBE_PROMPT}],
             )
-        return True, int((time.time() - t0) * 1000), ""
+            tools_ok = bool(resp.choices[0].message.tool_calls)
+        return True, int((time.time() - t0) * 1000), tools_ok, ""
     except Exception as e:
-        return False, int((time.time() - t0) * 1000), str(e).splitlines()[0][:90]
+        # The tools parameter may be what failed; see if plain chat works at all.
+        try:
+            _plain_ok(name, model)
+            return True, int((time.time() - t0) * 1000), False, "no tools"
+        except Exception as e2:
+            return False, int((time.time() - t0) * 1000), False, str(e2).splitlines()[0][:90]
 
 
 def _models_of(prov):
@@ -607,12 +650,12 @@ def list_providers():
 
 
 def run_benchmark():
-    """Ping every model of every available provider; print a ranked table.
+    """Probe every model of every available provider (chat + tool-calling).
 
     Returns (working_rows, suggestion) where each row is
-    (name, model, ok, ms, note, free).
+    (name, model, ok, ms, note, free, tools_ok).
     """
-    print("Checking available providers (one quick call per model)...\n")
+    print("Checking available providers (chat + a tool-call test per model)...\n")
     rows = []
     for name, prov in PROVIDERS.items():
         free = bool(prov.get("free"))
@@ -622,16 +665,23 @@ def run_benchmark():
             print("  {:<11} -- skipped ({})".format(name, reason))
             continue
         for model in _models_of(prov):
-            ok, ms, note = ping(name, model)
-            status = "OK  {:>5} ms".format(ms) if ok else "FAIL ({})".format(note)
+            ok, ms, tools_ok, note = probe(name, model)
+            if ok:
+                status = "OK {:>5} ms  tools:{}".format(ms, "yes" if tools_ok else "NO ")
+            else:
+                status = "FAIL ({})".format(note)
             print("  {:<11} {:<46} {} {}".format(
                 name, model, status, "[free]" if free else "[paid]"))
-            rows.append((name, model, ok, ms, note, free))
+            rows.append((name, model, ok, ms, note, free, tools_ok))
 
     working = [r for r in rows if r[2]]
-    free_working = sorted([r for r in working if r[5]], key=lambda r: r[3])
-    any_working = sorted(working, key=lambda r: r[3])
-    suggestion = free_working[0] if free_working else (any_working[0] if any_working else None)
+    by_speed = lambda rs: sorted(rs, key=lambda r: r[3])
+    # Prefer models that can use tools (free first), then fall back to chat-only.
+    ranked = (by_speed([r for r in working if r[6] and r[5]])      # tools + free
+              or by_speed([r for r in working if r[6]])            # tools, any
+              or by_speed([r for r in working if r[5]])            # free, chat-only
+              or by_speed(working))                                # anything reachable
+    suggestion = ranked[0] if ranked else None
     return working, suggestion
 
 
@@ -644,8 +694,9 @@ def choose_via_benchmark():
     print("\nWorking models:")
     for i, r in enumerate(working, 1):
         star = "  <- suggested" if r is suggestion else ""
-        print("  [{}] {} / {}   {} ms   ({}){}".format(
-            i, r[0], r[1], r[3], "free" if r[5] else "paid", star))
+        tools = "tools" if r[6] else "no-tools"
+        print("  [{}] {} / {}   {} ms   ({}, {}){}".format(
+            i, r[0], r[1], r[3], "free" if r[5] else "paid", tools, star))
 
     raw = input("\nChoose a number (Enter = suggested): ").strip()
     choice = suggestion
