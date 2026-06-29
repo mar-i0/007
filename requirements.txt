@@ -1,0 +1,6 @@
+# Install only the provider you use (either is enough):
+anthropic
+openai
+# For web browsing tools (browser_*); after installing also run:
+#   python -m playwright install chromium
+playwright
