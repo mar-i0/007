@@ -6,3 +6,5 @@ venv/
 # Local API keys — never commit these (the .example template is tracked):
 keys.env
 .007.keys
+# Browser screenshots written at runtime:
+screenshot.png

@@ -24,6 +24,7 @@ In the prompt: /models switches model live, /help lists commands, /quit exits
 
 import argparse
 import atexit
+import base64
 import json
 import os
 import platform
@@ -64,6 +65,8 @@ SYSTEM = (
     "- browser_navigate / browser_read / browser_click / browser_type: open and read web "
     "pages, click links, fill forms. ALWAYS use these to get information from a website, "
     "then write_file to save results locally.\n"
+    "- browser_screenshot: capture the current page as an image (use it when the page text "
+    "isn't enough to answer; only useful if your model can see images).\n"
     "Be concise and prefer doing the work over describing it."
 ).format(SHELL_NAME)
 
@@ -245,6 +248,17 @@ TOOL_SPECS = [
                 "enter": {"type": "boolean", "description": "Press Enter after typing (submit the form)"},
             },
             "required": ["selector", "text"],
+        },
+    },
+    {
+        "name": "browser_screenshot",
+        "description": ("Capture the current browser page as a PNG image (saved locally and, "
+                        "for vision-capable models, shown to you). Use when page text is insufficient."),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "full_page": {"type": "boolean", "description": "Capture the whole page, not just the viewport"},
+            },
         },
     },
 ]
@@ -439,6 +453,19 @@ def _run_tool(name, tool_input):
             if _BROWSER["page"] is None:
                 return "No page open yet - use browser_navigate first."
             return _page_summary(_BROWSER["page"])
+        if name == "browser_screenshot":
+            if _BROWSER["page"] is None:
+                return "No page open yet - use browser_navigate first."
+            page = _BROWSER["page"]
+            png = page.screenshot(full_page=bool(tool_input.get("full_page")))
+            path = os.path.join(WORKDIR, "screenshot.png")
+            with open(path, "wb") as f:
+                f.write(png)
+            return {
+                "text": "Screenshot saved to {} ({} KB). URL: {}".format(
+                    path, len(png) // 1024, page.url),
+                "image_png_b64": base64.b64encode(png).decode("ascii"),
+            }
         if name == "browser_click":
             target = tool_input["target"]
             if not confirm("click '{}'".format(target)):
@@ -499,10 +526,20 @@ def run_anthropic(client, messages, model):
             for block in response.content:
                 if block.type == "tool_use":          # custom client tools only
                     print("[tool] {} {}".format(block.name, json.dumps(block.input)))
+                    result = execute_tool(block.name, block.input)
+                    if isinstance(result, dict):      # image-bearing (screenshot)
+                        content = [
+                            {"type": "text", "text": result["text"]},
+                            {"type": "image", "source": {
+                                "type": "base64", "media_type": "image/png",
+                                "data": result["image_png_b64"]}},
+                        ]
+                    else:
+                        content = result
                     results.append({
                         "type": "tool_result",
                         "tool_use_id": block.id,
-                        "content": execute_tool(block.name, block.input),
+                        "content": content,
                     })
             messages.append({"role": "user", "content": results})
             continue
@@ -532,13 +569,33 @@ OPENAI_TOOLS = [
 ]
 
 
+def _strip_images(messages):
+    """Neutralise image content (keeps roles/order intact). Returns True if any removed.
+    Used to recover when a non-vision model rejects a screenshot."""
+    removed = False
+    for msg in messages:
+        c = msg.get("content")
+        if isinstance(c, list) and any(
+                isinstance(p, dict) and p.get("type") == "image_url" for p in c):
+            msg["content"] = "[screenshot removed - this model cannot view images]"
+            removed = True
+    return removed
+
+
 def run_openai(client, messages, model):
     while True:
         # No max_tokens: o-series / newer models reject it in favour of
         # max_completion_tokens. Letting it default keeps this model-agnostic.
-        response = client.chat.completions.create(
-            model=model, messages=messages, tools=OPENAI_TOOLS,
-        )
+        try:
+            response = client.chat.completions.create(
+                model=model, messages=messages, tools=OPENAI_TOOLS,
+            )
+        except Exception:
+            # A screenshot we just attached may be unsupported by this model;
+            # drop images so the conversation isn't poisoned, then surface the error.
+            if _strip_images(messages):
+                print("\n[note] this model can't view images; dropped the screenshot.")
+            raise
         choice = response.choices[0]
         msg = choice.message
 
@@ -561,17 +618,29 @@ def run_openai(client, messages, model):
                     for tc in msg.tool_calls
                 ],
             })
+            images = []
             for tc in msg.tool_calls:
                 try:
                     args = json.loads(tc.function.arguments or "{}")
                 except json.JSONDecodeError:
                     args = {}
                 print("[tool] {} {}".format(tc.function.name, tc.function.arguments))
+                result = execute_tool(tc.function.name, args)
+                if isinstance(result, dict):          # image-bearing (screenshot)
+                    images.append(result["image_png_b64"])
+                    result = result["text"]
                 messages.append({
                     "role": "tool",
                     "tool_call_id": tc.id,
-                    "content": execute_tool(tc.function.name, args),
+                    "content": result,
                 })
+            if images:
+                # Tool-role messages can't carry images on OpenAI; attach as a user turn.
+                parts = [{"type": "text", "text": "Screenshot(s) of the current page:"}]
+                for b in images:
+                    parts.append({"type": "image_url",
+                                  "image_url": {"url": "data:image/png;base64," + b}})
+                messages.append({"role": "user", "content": parts})
             continue
 
         messages.append({"role": "assistant", "content": msg.content})

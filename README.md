@@ -154,6 +154,11 @@ Four tools drive a real Chromium browser, with one persistent browser per sessio
 - `browser_read()` — re-read the current page after an action.
 - `browser_click(target)` — click by visible text or CSS selector (asks to confirm).
 - `browser_type(selector, text, enter?)` — fill an input, optionally submit (asks to confirm).
+- `browser_screenshot(full_page?)` — capture the page as a PNG (saved to `screenshot.png`)
+  and show it to **vision-capable** models. On Anthropic the image rides in the tool result;
+  on OpenAI-compatible vision models (e.g. GPT-4o, Gemini) it's attached as an image message.
+  A non-vision model can't see it — the file is still saved and the image is auto-removed
+  from the conversation so it doesn't break following turns.
 
 Runs headless by default; set `BROWSER_HEADLESS = False` near the top of `007.py` to watch
 the window. The browser starts lazily, so you only need Playwright installed if you browse.
